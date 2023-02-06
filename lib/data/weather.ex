@@ -26,7 +26,9 @@ defmodule AtisDecoder.Data.Weather do
       "SKC",
       "CLR",
       "SKT",
-      "SCT"
+      "SCT",
+      "OVC",
+      "BKN"
   ]
 
   def valid_weather_codes, do: @valid_weather_codes

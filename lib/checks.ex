@@ -12,6 +12,14 @@ defmodule AtisDecoder.Checks do
     is_integer(test)
   end
 
+  def can_become_integer?(test) when is_integer(test), do: true
+  def can_become_integer?(test) do
+    case Integer.parse(test) do
+      {_, ""} -> true
+      _ -> false
+    end
+  end
+
   def is_iata?(test) do
     Enum.member?(IATA.valid_iata_codes(), test)
   end
@@ -108,6 +116,18 @@ defmodule AtisDecoder.Checks do
     String.ends_with?(data_block, options)
   end
 
+  def begins_with?(data_block, characters) do
+    String.starts_with?(data_block, characters)
+  end
+
+  def ends_with_integer?(data_block, characters) do
+    test = String.slice(data_block, characters)
+    case Integer.parse(test) do
+      {_, ""} -> true
+      _ -> false
+    end
+  end
+
   def length_divisible_by?(data_block, divisor) do
     length = String.length(data_block)
     if rem(length, divisor) == 0 do
@@ -126,6 +146,41 @@ defmodule AtisDecoder.Checks do
       Enum.member?(Weather.valid_weather_codes, block)
     end)
     !Enum.member?(data_block, false)
+  end
+
+  def begins_with_ceiling_block?(data_block) do
+    first_3 = String.slice(data_block, 0..2)
+    Enum.member?(Weather.valid_ceiling_codes, first_3)
+  end
+
+  def includes_characters?(data_block, characters) do
+    test = Enum.map(characters, fn character ->
+      String.contains?(data_block, character)
+    end)
+    !Enum.member?(test, false)
+  end
+
+  def is_of_length_after?(data_block, fun, l) do
+    test = fun.(data_block) |> IO.inspect
+    length(test) == l
+  end
+
+  def includes_temp_and_dew?(data_block) do
+    test = false
+    split = String.split(data_block, "/")
+    test = Enum.map(split, fn chunk ->
+      first = String.slice(chunk, 0..0)
+      if first == "M" do
+        true
+      else
+        if can_become_integer?(first) do
+          true
+        else
+          false
+        end
+      end
+    end)
+    !Enum.member?(test, false)
   end
 
   defp get_alphabet_list, do: for n <- ?a..?z, do: << n :: utf8 >>

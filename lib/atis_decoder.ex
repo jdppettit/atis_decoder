@@ -1,7 +1,7 @@
 defmodule AtisDecoder do
   alias AtisDecoder.Data.Dummy
   alias AtisDecoder.Checks
-  alias AtisDecoder.Data.Units
+  alias AtisDecoder.Data.{Units,Weather}
 
   def decode(data), do: &iterate(&1)
   def decode do
@@ -56,6 +56,42 @@ defmodule AtisDecoder do
 
     acc = if is_weather_block?(data_block) do
       parse_weather_block(data_block, acc)
+    else
+      acc
+    end
+
+    acc = if is_ceiling_block?(data_block) do
+      parse_ceiling_block(data_block, acc)
+    else
+      acc
+    end
+
+    acc = if is_temperature_dew_block?(data_block) do
+      parse_temperature_dew_block(data_block, acc)
+    else
+      acc
+    end
+
+    acc = if is_altimeter_block?(data_block) do
+      parse_altimeter_block(data_block, acc)
+    else
+      acc
+    end
+
+    acc = if not is_nil(Map.get(acc, :runway_capture, nil)) do
+      parse_runway_blocks(data_block, acc)
+    else
+      acc
+    end
+
+    acc = if begin_runway_capture?(data_block) do
+      mark_begin_runway_capture(acc)
+    else
+      acc
+    end
+
+    acc = if end_runway_capture?(data_block, acc) do
+      mark_end_runway_capture(acc)
     else
       acc
     end
@@ -145,12 +181,70 @@ defmodule AtisDecoder do
     end
   end
 
+  def is_ceiling_block?(data_block) do
+    with true <- Checks.length_divisible_by?(data_block, 3),
+         true <- Checks.begins_with_ceiling_block?(data_block),
+         true <- Checks.is_alphanumeric?(data_block),
+         true <- Checks.ends_with_integer?(data_block, -3..-1) || data_block == "CLR"
+    do
+      true
+    else
+      _ ->
+        false
+    end
+  end
+
+  def is_temperature_dew_block?(data_block) do
+    with true <- Checks.is_of_length?(data_block, [7, 5, 6]),
+         true <- Checks.includes_characters?(data_block, ["/"]),
+         true <- Checks.is_of_length_after?(data_block, &String.split(&1, "/"), 2),
+         true <- Checks.includes_temp_and_dew?(data_block)
+    do
+      true
+    else
+      _ ->
+        false
+    end
+  end
+
+  def is_altimeter_block?(data_block) do
+    with true <- Checks.is_of_length?(data_block, [5]),
+         true <- Checks.begins_with?(data_block, "A"),
+         true <- Checks.ends_with_integer?(data_block, 1..-1)
+    do
+      true
+    else
+      _ ->
+        false
+    end
+  end
+
+  def begin_runway_capture?(data_block) do
+    case data_block do
+      "DEPARTING" -> true
+      _ -> false
+    end
+  end
+
+  def end_runway_capture?(data_block, acc) do
+    if String.contains?(data_block, ".") and not is_nil(Map.get(acc, :runway_capture, nil)) do
+      true
+    else
+      false
+    end
+  end
+
+
+  # If it is already set, chances are we are seeing a false positive
+  # if we trigger on it again.
+  def parse_airport_data(_, %{airport: airport} = acc), do: acc
   def parse_airport_data(data_block, acc) do
     acc
     |> Map.put(:airport, data_block)
     |> bump_acc
   end
 
+  def parse_information_block(_, %{information: information} = acc), do: acc
   def parse_information_block(data_block, acc) do
     acc
     |> Map.put(:information, data_block)
@@ -317,33 +411,106 @@ defmodule AtisDecoder do
 
     acc
     |> Map.put(:weather, data_block)
-    |> Map.replace(:acc, Map.get(acc, :acc) + 1)
+    |> bump_acc
+
   end
 
   # Represents the ceiling and obstruction type in feet
   # FEW000
-  def parse_data(data_block, %{acc: 7} = acc) do
+  def parse_ceiling_block("CLR", acc) do
+    acc
+    |> Map.put(:clouds, %{layer_type: "CLR", layer_type_human: "clear", distance: 999})
+    |> bump_acc
+  end
 
+  def parse_ceiling_block(data_block, acc) do
     obstruction_type = String.slice(data_block, 0..2)
     obstruction_type_human = ceiling_to_human(obstruction_type)
     ceiling = String.slice(data_block, 3..5)
 
-    ceiling_data = [
-      %{
-        obstruction_type: obstruction_type,
-        obstruction_type_human: obstruction_type_human,
-        ceiling: ceiling
-      }
-    ]
+    ceiling_data = %{
+      layer_type: obstruction_type,
+      layer_type_human: obstruction_type_human,
+      distance: ceiling
+    }
+
+    ceiling_data = [ceiling_data | Map.get(acc, :clouds, [])]
 
     acc
-    |> Map.put(:ceiling, ceiling_data)
-    |> Map.replace(:acc, Map.get(acc, :acc) + 1)
+    |> Map.put(:clouds, ceiling_data)
+    |> bump_acc
+  end
+
+  def parse_temperature_dew_block(data_block, acc) do
+    split = String.split(data_block, "/")
+    [first, last] = split |> IO.inspect
+    temperature = if String.slice(first, 0..0) == "M" do
+      "-#{String.slice(first, 1..-1)}"
+    else
+      String.slice(first, 1..-1)
+    end
+
+    dew_point = if String.slice(last, 0..0) == "M" do
+      "-#{String.slice(last, 1..-1)}"
+    else
+      String.slice(last, 1..-1)
+    end
+
+    acc
+    |> Map.put(:temperature, temperature)
+    |> Map.put(:dew_point, dew_point)
+    |> bump_acc
+  end
+
+  def parse_altimeter_block(data_block, acc) do
+    altimeter_value = String.slice(data_block, 1..-1)
+
+    acc
+    |> Map.put(:altimeter, altimeter_value)
+    |> bump_acc
+  end
+
+  def parse_runway_blocks("RWY", acc), do: acc
+  def parse_runway_blocks("DEPARTING", acc), do: acc
+  def parse_runway_blocks(data_block, acc) do
+    data_block = String.replace(data_block, ~r/[[:punct:]]/, "")
+    {runway_digit, runway_string} = if String.length(data_block) == 3 do
+      last_character = String.slice(data_block, -1..-1)
+      if last_character == "L" do
+        {String.slice(data_block, 0..1) <> "1", data_block}
+      else
+        if last_character == "R" do
+          {String.slice(data_block, 0..1) <> "2", data_block}
+        else
+          {String.slice(data_block, 0..1), data_block}
+        end
+      end
+    else
+      {String.slice(data_block, 0..1), data_block}
+    end
+
+    runways = [[%{runway_digit: runway_digit, runway_string: runway_string}] | Map.get(acc, :runways, [])]
+
+    acc
+    |> Map.put(:runways, runways)
+    |> bump_acc
   end
 
   def parse_data(_data_block, acc) do
     acc
     |> Map.replace(:acc, Map.get(acc, :acc) + 1)
+  end
+
+  def mark_begin_runway_capture(acc) do
+    acc
+    |> Map.put(:runway_capture, 1)
+    |> bump_acc
+  end
+
+  def mark_end_runway_capture(acc) do
+    acc
+    |> Map.drop([:runway_capture])
+    |> bump_acc
   end
 
   defp to_phoenetic(data) do
@@ -385,6 +552,8 @@ defmodule AtisDecoder do
       "CLR" -> "clear skies"
       "SKT" -> "scattered clouds"
       "SCT" -> "scattered clouds"
+      "OVC" -> "overcast"
+      "BKN" -> "broken"
       "FG" -> "fog"
       "BR" -> "mist"
       "FU" -> "smoke"
