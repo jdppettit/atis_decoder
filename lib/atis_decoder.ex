@@ -443,7 +443,7 @@ defmodule AtisDecoder do
 
   def parse_temperature_dew_block(data_block, acc) do
     split = String.split(data_block, "/")
-    [first, last] = split |> IO.inspect
+    [first, last] = split
     temperature = if String.slice(first, 0..0) == "M" do
       "-#{String.slice(first, 1..-1)}"
     else
@@ -489,7 +489,7 @@ defmodule AtisDecoder do
       {String.slice(data_block, 0..1), data_block}
     end
 
-    runways = [[%{runway_digit: runway_digit, runway_string: runway_string}] | Map.get(acc, :runways, [])]
+    runways = [%{runway_digit: runway_digit, runway_string: runway_string} | Map.get(acc, :runways, [])]
 
     acc
     |> Map.put(:runways, runways)
